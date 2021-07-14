@@ -9,4 +9,7 @@ MUSDBWAV_ROOT_PATH = '/mnt/data/Music/MUSDB18wav'
 MUSDBWAV8K_ROOT_PATH = '/mnt/data/Music/MUSDB18wav8k'
 FUSS_ROOT_PATH = '/mnt/data/fuss_dataset/fuss_dev/ssdata'
 
-API_KEY = 'your_cometml_API_KEY'
+# use python-dotenv instead to load the API key. the Comet.ml API key should 
+# then be placed in a .env file with the variable name `API_KEY`.
+from dotenv import dotenv_values
+API_KEY = dotenv_values(".env")['API_KEY']
