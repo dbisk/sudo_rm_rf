@@ -19,3 +19,8 @@ ipython_config.py
 .venv/
 env/
 venv/
+
+# macOS filesystem
+.DS_STORE
+
+
