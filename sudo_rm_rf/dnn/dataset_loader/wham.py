@@ -96,8 +96,9 @@ class Dataset(torch.utils.data.Dataset, abstract_dataset.Dataset):
             extra_lambda_checks=[lambda y: os.path.lexists(y)])
         self.dataset_dirpath = self.get_path()
 
-        self.mixtures_info_metadata_path = os.path.join(
-            self.dataset_dirpath, 'metadata')
+        # self.mixtures_info_metadata_path = os.path.join(
+        #     self.dataset_dirpath, 'metadata')
+        self.mixtures_info_metadata_path = os.path.join("/home/dean/metad" + self.dataset_dirpath, 'metadata') # workaround with no write access to directories
 
         self.timelength = self.get_arg_and_check_validness(
             'timelength', known_type=float)

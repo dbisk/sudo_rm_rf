@@ -16,7 +16,6 @@ from __config__ import API_KEY
 from comet_ml import Experiment
 
 import torch
-from torch.cuda.amp import autocast
 
 from torch.nn import functional as F
 from tqdm import tqdm
@@ -24,7 +23,7 @@ from pprint import pprint
 import sudo_rm_rf.dnn.experiments.utils.improved_cmd_args_parser_v2 as parser
 import sudo_rm_rf.dnn.experiments.utils.dataset_setup as dataset_setup
 import sudo_rm_rf.dnn.losses.sisdr as sisdr_lib
-import sudo_rm_rf.dnn.models.improved_sudormrf as improved_sudormrf
+import sudo_rm_rf.dnn.models.improved_sudormrf_f16 as improved_sudormrf_f16
 import sudo_rm_rf.dnn.models.sudormrf as initial_sudormrf
 import sudo_rm_rf.dnn.utils.cometml_loss_report as cometml_report
 import sudo_rm_rf.dnn.utils.cometml_log_audio as cometml_audio_logger
@@ -64,8 +63,9 @@ os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(
 
 back_loss_tr_loss_name, back_loss_tr_loss = (
     'tr_back_loss_SISDRi',
-    sisdr_lib.PITLossWrapper(sisdr_lib.PairwiseNegSDR("sisdr"),
-                             pit_from='pw_mtx')
+    lambda x, y: torch.mean(torch.abs(y - x))
+    # sisdr_lib.PITLossWrapper(sisdr_lib.PairwiseNegSDR("sisdr"),
+    #                          pit_from='pw_mtx')
     # sisdr_lib.PermInvariantSISDR(batch_size=hparams['batch_size'],
     #                              n_sources=hparams['n_sources'],
     #                              zero_mean=True,
@@ -87,7 +87,7 @@ for val_set in [x for x in generators if not x == 'train']:
 all_losses.append(back_loss_tr_loss_name)
 
 if hparams['model_type'] == 'relu':
-    model = improved_sudormrf.SuDORMRF(out_channels=hparams['out_channels'],
+    model = improved_sudormrf_f16.SuDORMRF(out_channels=hparams['out_channels'],
                                        in_channels=hparams['in_channels'],
                                        num_blocks=hparams['num_blocks'],
                                        upsampling_depth=hparams[
@@ -118,7 +118,10 @@ print('Trainable Parameters: {}'.format(numparams))
 
 model = torch.nn.DataParallel(model).cuda()
 opt = torch.optim.Adam(model.parameters(), lr=hparams['learning_rate'])
+# opt = torch.optim.SGD(model.parameters(), lr=hparams['learning_rate'])
 
+# change the model to float16
+model = model.half()
 
 # lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
 #     optimizer=opt, mode='max', factor=1. / hparams['divide_lr_by'],
@@ -164,19 +167,24 @@ for i in range(hparams['n_epochs']):
         clean_wavs[:, 0, :] = normalize_tensor_wav(new_s1)
         clean_wavs[:, 1, :] = normalize_tensor_wav(new_s2)
         # ===============================================
-        
-        with autocast():
-            rec_sources_wavs = model(m1wavs.unsqueeze(1))
 
-            l = torch.clamp(
-                back_loss_tr_loss(rec_sources_wavs, clean_wavs),
-                min=-30., max=+30.)
+        # convert the input and ground truth tensors to float16
+        m1wavs = m1wavs.half()
+        clean_wavs = clean_wavs.half()
+
+        rec_sources_wavs = model(m1wavs.unsqueeze(1))
+
+        l = torch.clamp(
+            back_loss_tr_loss(rec_sources_wavs, clean_wavs),
+            min=-30., max=+30.)
         l.backward()
+        print(l.detach().item())
         if hparams['clip_grad_norm'] > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(),
                                            hparams['clip_grad_norm'])
 
         opt.step()
+        break
     # lr_scheduler.step(res_dic['val_SISDRi']['mean'])
     if hparams['patience'] > 0:
         if tr_step % hparams['patience'] == 0:
@@ -198,6 +206,10 @@ for i in range(hparams['n_epochs']):
                     m1wavs = normalize_tensor_wav(m1wavs)
                     clean_wavs = data[-1].cuda()
 
+                    # convert the input and ground truth tensors to float16
+                    m1wavs = m1wavs.half()
+                    clean_wavs = clean_wavs.half()
+
                     rec_sources_wavs = model(m1wavs.unsqueeze(1))
 
                     for loss_name, loss_func in val_losses[val_set].items():
@@ -205,7 +217,9 @@ for i in range(hparams['n_epochs']):
                                       clean_wavs,
                                       initial_mixtures=m1wavs.unsqueeze(1))
                         res_dic[loss_name]['acc'] += l.tolist()
-
+                    break
+            
+            print(rec_sources_wavs.dtype)
             audio_logger.log_batch(rec_sources_wavs, clean_wavs, m1wavs,
                                    experiment, step=val_step, tag=val_set)
 
